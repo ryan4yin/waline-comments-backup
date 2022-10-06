@@ -1,0 +1,51 @@
+name: regularly backup waline comments
+
+on:
+  push:
+    paths:
+      - '**.py'  # on python script changed
+
+  schedule:
+    # 尽量别使用整点，可能会因为跑的 action 太多而排队
+    - cron: "25 */6 * * *"  # 分 时 日 月 周
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          submodules: recursive  # Fetch Hugo themes recursively
+          fetch-depth: 0         # Fetch all history for .GitInfo and .Lastmod
+          lfs: true              # download Git-LFS files
+
+      - name: Use Python3
+        uses: actions/setup-python@v3
+        with:
+          python-version: '3.10'
+          architecture: 'x64'
+
+      - name: Backup Comments
+        run: |
+          set -ex
+
+          pip install requests
+          python3 backup_comments.py
+
+          # 使用 gpg 加密备份文件，需要提前生成随机密码，保存到 github action secrets 中，环境变量名称为 `COMMENTS_DECRYPT_KEY`
+          # 建议使用密码管理器备份此 gpg 密码，方便在本地做数据恢复
+          # 将数据解密到 /tmp 文件夹中（建议在需要时，在本地执行）：gpg --quiet --batch --yes --decrypt --passphrase="$COMMENTS_DECRYPT_KEY" --output /tmp/waline_comments.json data/waline_comments.json.gpg
+          gpg --quiet --batch --yes --passphrase="$COMMENTS_DECRYPT_KEY" --symmetric --cipher-algo AES256 data/waline_comments.json
+
+          # 删除明文的备份文件
+          rm -f data/waline_comments.json
+        env:
+          WALINE_JWT: ${{ secrets.WALINE_JWT }}
+          COMMENTS_DECRYPT_KEY: ${{ secrets.COMMENTS_DECRYPT_KEY }}
+      - name: Commit changes
+        run: |
+          git config --local user.email "ryan4yin[bot]@users.noreply.github.com"
+          git config --local user.name "ryan4yin[bot]"
+          git add data/
+          git commit -m "feat: backup waline comments"
+          git push
